@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>SIKKA - Train Reservation System</title>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- LOGIN PAGE (S-01) — Dhay -->
+<div id="loginPage" class="login-page">
+  <div class="login-left">
+    <div class="login-blob"></div>
+    <div class="login-circle">
+      <div class="login-train">🚆</div>
+      <div class="login-title">SIKKA</div>
+    </div>
+  </div>
+  <div class="login-right">
+    <div class="login-form">
+      <input id="loginUser" placeholder="id / username" class="login-input"/>
+      <input id="loginPass" placeholder="password" type="password" class="login-input" onkeydown="if(event.key==='Enter')handleLogin()"/>
+      <div id="loginError" class="login-error"></div>
+      <div style="text-align:center"><button onclick="handleLogin()" class="login-btn">sign in</button></div>
+    </div>
+  </div>
+</div>
+
+<!-- MAIN APP -->
+<div id="appPage" class="app" style="display:none">
+  <!-- SIDEBAR -->
+  <div class="sidebar">
+    <div class="sidebar-logo">SIKKA</div>
+    <div class="sidebar-section">MAIN</div>
+    <a onclick="navigate('dashboard')" class="nav-link active" id="nav-dashboard">Dashboard</a>
+    <a onclick="navigate('schedules')" class="nav-link" id="nav-schedules">Schedules</a>
+    <a onclick="navigate('reservations')" class="nav-link" id="nav-reservations">Reservations</a>
+    <a onclick="navigate('passengers')" class="nav-link" id="nav-passengers">Passengers</a>
+    <a onclick="navigate('booking')" class="nav-link" id="nav-booking">Book ticket</a>
+    <div class="sidebar-section">REPORTS</div>
+    <a onclick="navigate('reports')" class="nav-link" id="nav-reports">Reports</a>
+    <div class="sidebar-section">SYSTEM</div>
+    <a onclick="navigate('users')" class="nav-link" id="nav-users">Users</a>
+    <a onclick="navigate('audit')" class="nav-link" id="nav-audit">Audit Log</a>
+    <div class="sidebar-bottom">
+      <div class="sidebar-user">
+        <div class="sidebar-avatar" id="userAvatar">D</div>
+        <div><div class="sidebar-name" id="userName">dhay</div><div class="sidebar-role" id="userRole">Administrator</div></div>
+      </div>
+      <button onclick="logout()" class="logout-btn">Logout</button>
+    </div>
+  </div>
+
+  <!-- MAIN CONTENT -->
+  <div class="main-content">
+    <div class="top-nav">
+      <span>ABOUT</span><span>SERVICES</span><span>BLOG</span><span>CONTACT</span>
+    </div>
+
+    <!-- DASHBOARD (S-18, S-19) — Lana -->
+    <div id="page-dashboard" class="page"></div>
+
+    <!-- SCHEDULES (S-04,05,06,07,08) — Danah -->
+    <div id="page-schedules" class="page" style="display:none"></div>
+
+    <!-- RESERVATIONS (S-12,16,17) — Sarah -->
+    <div id="page-reservations" class="page" style="display:none"></div>
+
+    <!-- PASSENGERS (S-09,10,11) — Munirah -->
+    <div id="page-passengers" class="page" style="display:none"></div>
+
+    <!-- BOOKING (S-13,14,15) — Nawal -->
+    <div id="page-booking" class="page" style="display:none"></div>
+
+    <!-- REPORTS (S-20,21,22,23,24) — Sarah -->
+    <div id="page-reports" class="page" style="display:none"></div>
+
+    <!-- USERS (S-02,03) — Lana -->
+    <div id="page-users" class="page" style="display:none"></div>
+
+    <!-- AUDIT (S-26,27) — Lana -->
+    <div id="page-audit" class="page" style="display:none"></div>
+  </div>
+</div>
+
+<!-- SCRIPTS — each member's file -->
+<script src="data.js"></script>
+<script src="login.js"></script>
+<script src="dashboard.js"></script>
+<script src="schedules.js"></script>
+<script src="reservations.js"></script>
+<script src="passengers.js"></script>
+<script src="booking.js"></script>
+<script src="reports.js"></script>
+<script src="users.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
