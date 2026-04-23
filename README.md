@@ -18,4 +18,3 @@ CS1350 Software Engineering 1 | Imam Mohammad Ibn Saud Islamic University
 
 ## Tech Stack
 HTML5, CSS3, JavaScript (Vanilla)
-//DHAY
