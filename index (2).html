@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SIKKA - Train Reservation System</title>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- LOGIN -->
+<div id="loginPage" class="login-page">
+  <div class="login-left">
+    <div class="login-blob"></div>
+    <div class="login-circle">
+      <div style="font-size:50px">🚆</div>
+      <div style="font-size:28px;font-weight:700;color:white;letter-spacing:4px;margin-top:4px">SIKKA</div>
+    </div>
+  </div>
+  <div class="login-right">
+    <div style="width:300px">
+      <input id="loginUser" class="login-input" placeholder="id / username"/>
+      <input id="loginPass" class="login-input" type="password" placeholder="password"/>
+      <div id="loginError" style="color:#e53935;font-size:12px;margin-bottom:8px"></div>
+      <div style="text-align:center">
+        <button onclick="handleLogin()" class="login-btn">sign in</button>
+      </div>
+      <div style="text-align:center;margin-top:12px;font-size:10px;color:#999">admin / admin123</div>
+    </div>
+  </div>
+</div>
+
+<!-- APP -->
+<div id="appPage" style="display:none" class="app-layout">
+  <div class="sidebar">
+    <div class="sidebar-logo">SIKKA</div>
+    <div class="sidebar-section">MAIN</div>
+    <a class="nav-link active" data-page="dashboard">Dashboard</a>
+    <a class="nav-link" data-page="schedules">Schedules</a>
+    <a class="nav-link" data-page="reservations">Reservations</a>
+    <a class="nav-link" data-page="passengers">Passengers</a>
+    <a class="nav-link" data-page="booking">Book ticket</a>
+    <div class="sidebar-section">REPORTS</div>
+    <a class="nav-link" data-page="reports">Reports</a>
+    <div class="sidebar-section">SYSTEM</div>
+    <a class="nav-link" data-page="users">Users</a>
+    <a class="nav-link" data-page="audit">Audit Log</a>
+    <div class="sidebar-bottom">
+      <div style="font-size:12px;font-weight:600" id="sidebarName">dhay</div>
+      <div style="font-size:10px;color:#4CAF50" id="sidebarRole">Administrator</div>
+      <button onclick="logout()" class="logout-btn">Logout</button>
+    </div>
+  </div>
+  <div class="main-content" id="mainContent"></div>
+</div>
+
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
