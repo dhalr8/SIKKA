@@ -50,7 +50,7 @@ var MTTR_HOURS = 0.5;              // mean time to repair one failure
   }
 
   // ============================================================
-  // 1) AUTHENTICATION  (25 demands)
+  // 1) AUTHENTICATION  (20 demands)
   // ============================================================
   function loginAttempt(user, pass) {
     currentUser = null;                 // fresh session per demand
@@ -68,7 +68,7 @@ var MTTR_HOURS = 0.5;              // mean time to repair one failure
     ["admin", "", false],
     ["", "admin123", false]
   ];
-  for (var a = 0; a < 25; a++) {
+  for (var a = 0; a < 20; a++) {
     (function () {
       var c = authCases[a % authCases.length];
       op("login " + c[0] + "/" + (c[1] || "(empty)"), "Authentication", function () {
@@ -122,7 +122,7 @@ var MTTR_HOURS = 0.5;              // mean time to repair one failure
   });
 
   // ============================================================
-  // 3) BOOKING  (30 demands)
+  // 3) BOOKING  (25 demands)
   // ============================================================
   function bookAttempt(passId, trainId) {
     show(renderBooking());
@@ -138,8 +138,8 @@ var MTTR_HOURS = 0.5;              // mean time to repair one failure
   }
   var somePassId = DB.passengers[0].id;
 
-  // 21 valid bookings across trains that have free seats
-  for (var b = 0; b < 21; b++) {
+  // 16 valid bookings across trains that have free seats
+  for (var b = 0; b < 16; b++) {
     (function (i) {
       var trainId = (i % 2 === 0) ? "TRN-001" : "TRN-003";
       op("book valid on " + trainId + " #" + i, "Booking", function () {
@@ -286,6 +286,87 @@ var MTTR_HOURS = 0.5;              // mean time to repair one failure
       });
     })(renderers[d]);
   }
+
+  // ============================================================
+  // 7) REQUIREMENTS CORRECTNESS  (10 demands)
+  // A demand fails if the system's OUTPUT is wrong for the spec,
+  // even when nothing crashes. These probe real, documented defects.
+  // ============================================================
+
+  // S-18: dashboard total-trains must reflect real data (correct in code)
+  op("dashboard trains count is real", "Requirements", function () {
+    var html = renderDashboard();
+    var ok = html.indexOf('>' + DB.schedules.length + '</div><div class="stat-lbl">Trains</div>') !== -1;
+    return { passed: ok, note: "trains stat should equal number of schedules" };
+  });
+  // S-18: dashboard active-bookings must reflect confirmed reservations (correct in code)
+  op("dashboard bookings count is real", "Requirements", function () {
+    var conf = 0;
+    for (var i = 0; i < DB.reservations.length; i++) if (DB.reservations[i].status === "Confirmed") conf++;
+    var html = renderDashboard();
+    var ok = html.indexOf('>' + conf + '</div><div class="stat-lbl">Bookings</div>') !== -1;
+    return { passed: ok, note: "bookings stat should equal confirmed reservations" };
+  });
+  // S-19: dashboard occupancy % must be computed from booked/seats (correct in code)
+  op("dashboard occupancy is computed", "Requirements", function () {
+    var s = DB.schedules[0];
+    var pct = Math.round(s.booked / s.seats * 100);
+    var html = renderDashboard();
+    return { passed: html.indexOf(pct + "%") !== -1, note: "occupancy should be booked/seats" };
+  });
+  // S-21: reports total-bookings must reflect real data (correct in code)
+  op("reports bookings count is real", "Requirements", function () {
+    var conf = 0;
+    for (var i = 0; i < DB.reservations.length; i++) if (DB.reservations[i].status === "Confirmed") conf++;
+    var html = renderReports();
+    var ok = html.indexOf('>' + conf + '</div><div class="stat-lbl">TOTAL BOOKINGS TODAY</div>') !== -1;
+    return { passed: ok, note: "today bookings should equal confirmed reservations" };
+  });
+  // S-18 DEFECT: passenger count is hard-coded 250, not the real total
+  op("dashboard passenger count is real", "Requirements", function () {
+    var html = renderDashboard();
+    var ok = html.indexOf('>' + DB.passengers.length + '</div><div class="stat-lbl">Passengers</div>') !== -1;
+    return { passed: ok, note: "passengers stat is hard-coded 250 (should be DB total)" };
+  });
+  // S-18 DEFECT: revenue is hard-coded 10000, not computed from bookings
+  op("dashboard revenue is computed", "Requirements", function () {
+    var html = renderDashboard();
+    var hardcoded = html.indexOf('>10000</div><div class="stat-lbl">Revenue</div>') !== -1;
+    return { passed: !hardcoded, note: "revenue is hard-coded 10000, not computed" };
+  });
+  // S-23 DEFECT: reports "revenue today" is hard-coded 1500 SAR
+  op("reports revenue today is computed", "Requirements", function () {
+    var html = renderReports();
+    var hardcoded = html.indexOf('>1500 SAR</div>') !== -1;
+    return { passed: !hardcoded, note: "revenue today is hard-coded 1500 SAR" };
+  });
+  // S-15 DEFECT: confirmation Booking ID differs from the stored reservation ID
+  op("confirmation ID matches stored reservation", "Requirements", function () {
+    show(renderBooking());
+    setVal("bPass", somePassId); setVal("bTrain", "TRN-001");
+    bookTicket();
+    var conf = $("bookConf").innerHTML;
+    var m = conf.match(/Booking ID:\s*([0-9]+)/);
+    var shownId = m ? m[1] : null;
+    var storedId = DB.reservations[DB.reservations.length - 1].id; // "#BK-00xxx"
+    var ok = shownId !== null && ("#BK-" + shownId === storedId || shownId === storedId);
+    return { passed: ok, note: "shown ID (" + shownId + ") differs from stored ID (" + storedId + ")" };
+  });
+  // S-13 DEFECT: stored reservation record has no price field
+  op("stored reservation includes price", "Requirements", function () {
+    var last = DB.reservations[DB.reservations.length - 1];
+    return { passed: last.hasOwnProperty("price"), note: "reservation record stores no price" };
+  });
+  // Data integrity: every reservation.train should match a real schedule route
+  op("reservations reference real schedules", "Requirements", function () {
+    var routes = {};
+    for (var i = 0; i < DB.schedules.length; i++) routes[DB.schedules[i].route] = true;
+    var allValid = true;
+    for (var j = 0; j < DB.reservations.length; j++) {
+      if (!routes[DB.reservations[j].train]) { allValid = false; break; }
+    }
+    return { passed: allValid, note: "seed reservations use train names not in the schedule table" };
+  });
 
   // ============================================================
   // METRICS
