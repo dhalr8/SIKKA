@@ -1,9 +1,12 @@
 // ===== SIKKA Data Store — Dhay =====
 var DB = {
+  // Passwords are NOT stored. Each user keeps a random salt and the
+  // salted SHA-256 hash (see security.js). Original passwords for testing:
+  // admin/admin123, staff1/staff123, staff2/staff123
   users: [
-    {id:1, username:"admin", password:"admin123", role:"Administrator", name:"dhay"},
-    {id:2, username:"staff1", password:"staff123", role:"Staff", name:"Danah"},
-    {id:3, username:"staff2", password:"staff123", role:"Staff", name:"Lana"}
+    {id:1, username:"admin",  salt:"a1b2c3d4e5f60718", hash:"9879a6c081970a685052bdaf0cba84347009c2f6f758c7a05257f5dcd6485ca8", role:"Administrator", name:"dhay"},
+    {id:2, username:"staff1", salt:"9f8e7d6c5b4a3021", hash:"7fddc2d7eb42c79a594f7a854da653b52c1c3a8aaa10481c0a8c531a8240611e", role:"Staff", name:"Danah"},
+    {id:3, username:"staff2", salt:"1122334455667788", hash:"63fe39a65e6d0f9b06f14be1a50aa67c5847aa67b39cbaf5ab5004cccae42d28", role:"Staff", name:"Lana"}
   ],
   schedules: [
     {id:"TRN-001", route:"RIYADH TO JEDDAH", dep:"Apr 3, 2026 9:41 AM", arr:"Apr 9, 2026 11:15 AM", seats:120, booked:63, price:50, status:"ACTIVE"},
@@ -73,7 +76,11 @@ function handleLogin() {
   if (!u || !p) { err.textContent = "incorrect username or password"; return; }
   var found = null;
   for (var i = 0; i < DB.users.length; i++) {
-    if (DB.users[i].username === u && DB.users[i].password === p) { found = DB.users[i]; break; }
+    // compare the salted SHA-256 hash instead of a plaintext password
+    if (DB.users[i].username === u &&
+        SIKKASec.verifyPassword(p, DB.users[i].salt, DB.users[i].hash)) {
+      found = DB.users[i]; break;
+    }
   }
   if (!found) { err.textContent = "incorrect username or password"; return; }
   currentUser = found;

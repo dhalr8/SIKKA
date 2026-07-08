@@ -66,7 +66,10 @@ function resetPass(id) {
   for (var i = 0; i < DB.users.length; i++) {
     if (DB.users[i].id === id) {
       var tmp = "temp" + Math.floor(1000 + Math.random() * 9000);
-      DB.users[i].password = tmp;
+      // store only a fresh salt + salted hash, never the plaintext
+      var cred = SIKKASec.makeCredential(tmp);
+      DB.users[i].salt = cred.salt;
+      DB.users[i].hash = cred.hash;
       alert("Temporary password for " + DB.users[i].username + ": " + tmp);
       break;
     }

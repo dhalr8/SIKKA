@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SIKKA - Reliability Test (100 Requests)</title>
+<style>
+  body { font-family: Arial, sans-serif; margin: 24px; color: #222; }
+  h1 { font-size: 20px; }
+  .hidden-host { position: absolute; left: -9999px; top: -9999px; }
+</style>
+</head>
+<body>
+  <h1>SIKKA Reliability Test &mdash; 100 Requests</h1>
+  <p>This page applies 100 operations to the live SIKKA functions and computes
+     POFOD, ROCOF, MTBF, and Availability. Results appear below (also in the browser console).</p>
+
+  <!-- Hidden host: elements the real functions read/write while the harness runs -->
+  <div class="hidden-host" id="loginPage"></div>
+  <div class="hidden-host" id="appPage"></div>
+  <div class="hidden-host">
+    <input id="loginUser"><input id="loginPass" type="password">
+    <span id="loginError"></span>
+    <span id="sidebarName"></span><span id="sidebarRole"></span>
+    <div id="mainContent"></div>
+  </div>
+
+  <div id="relResults">Running…</div>
+
+  <script src="security.js"></script>
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+  <script src="reliability.js"></script>
+</body>
+</html>
