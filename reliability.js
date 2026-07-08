@@ -1,438 +1,191 @@
 // ============================================================
-// SIKKA Reliability Test Harness  (SWE2 Phase 1 — part b)
-// Applies 100 requests to the REAL system functions and computes:
+// SIKKA Reliability Test  (SWE2 Phase 1 — Part B)
+// Applies 100 REAL requests to the Supabase database and computes:
 //   Probability of Failure on Demand (POFOD)
 //   Rate of Occurrence of Failures  (ROCOF)
 //   Mean Time Between Failures       (MTBF)
 //   Availability
 //
-// A "demand" = one system operation (login, register, book, cancel,
-// create schedule, render a page). A demand is a SUCCESS if the system
-// behaves correctly — including correctly REJECTING bad input. It is a
-// FAILURE only if the system crashes or produces the wrong outcome.
+// A "request" = one real database operation (read or write) sent to
+// Supabase over the network. A request SUCCEEDS if the database returns
+// a valid response with no error. It FAILS if the request errors, times
+// out, or the service is unavailable (a real outage shows up here).
 //
-// Run in the browser: open reliability.html  (results shown on screen).
+// Browser:  open reliability.html with Live Server.
+// The global `supa` client comes from supabaseClient.js.
 // ============================================================
 
-// ---- Parameters the team may adjust and must justify in the report ----
-var OBSERVATION_PERIOD_HOURS = 24; // the window the 100 requests represent
+// ---- Parameters the team may adjust and justify in the report ----
+var OBSERVATION_PERIOD_HOURS = 24; // window the 100 requests represent
 var MTTR_HOURS = 0.5;              // mean time to repair one failure
 
-(function () {
+async function runReliability() {
+  var now = (typeof performance !== "undefined" && performance.now)
+    ? function () { return performance.now(); }
+    : function () { return Date.now(); };
 
-  // ---- controllable stubs so real functions run without a live UI ----
-  navigate = function () {};                 // isolate each operation
-  window.alert = function () {};
-  var CONFIRM_ANSWER = true;
-  window.confirm = function () { return CONFIRM_ANSWER; };
-  var PROMPT_ANSWER = null;
-  window.prompt = function () { return PROMPT_ANSWER; };
-
-  function $(id) { return document.getElementById(id); }
-  function setVal(id, v) { var el = $(id); if (el) el.value = v; }
-
-  // render a page into #mainContent so its form inputs exist as real DOM
-  function show(html) { $("mainContent").innerHTML = html; }
-
+  var tag = Date.now();               // unique suffix so writes don't collide
   var results = [];
-  function record(name, category, passed, note) {
-    results.push({ name: name, category: category, passed: passed, note: note || "" });
-  }
+  var requests = [];
 
-  // run one operation; any thrown error is itself a failure (a crash)
-  function op(name, category, fn) {
+  function add(name, category, fn) { requests.push({ name: name, category: category, fn: fn }); }
+
+  // ---------- 50 READ requests ----------
+  for (var i = 0; i < 15; i++)
+    add("read active schedules #" + i, "Read: schedules",
+      function () { return supa.from("schedules").select("*"); });
+
+  for (var i = 0; i < 10; i++)
+    add("auth lookup (username=admin) #" + i, "Read: users (auth)",
+      function () { return supa.from("users").select("username,role").eq("username", "admin"); });
+
+  for (var i = 0; i < 15; i++)
+    add("read passengers #" + i, "Read: passengers",
+      function () { return supa.from("passengers").select("*"); });
+
+  for (var i = 0; i < 10; i++)
+    add("read reservations #" + i, "Read: reservations",
+      function () { return supa.from("reservations").select("*"); });
+
+  // ---------- 50 WRITE requests ----------
+  // 20 passenger inserts (unique national IDs)
+  for (var i = 0; i < 20; i++)
+    (function (k) {
+      add("register passenger #" + k, "Write: register passenger",
+        function () {
+          return supa.from("passengers").insert({
+            name: "Load Test " + k,
+            nid: "LT" + tag + "-" + k,
+            phone: "0500000000",
+            email: "lt" + k + "@test.com"
+          });
+        });
+    })(i);
+
+  // 15 reservation inserts (unique ids we can cancel later)
+  var resIds = [];
+  for (var i = 0; i < 15; i++)
+    (function (k) {
+      var rid = "#LT-" + tag + "-" + k;
+      resIds.push(rid);
+      add("create reservation #" + k, "Write: create reservation",
+        function () {
+          return supa.from("reservations").insert({
+            id: rid, passenger: "Load Test " + k, train: "RIYADH TO JEDDAH",
+            date: "01/01/2026", seat: "A" + k, status: "Confirmed", price: 50
+          });
+        });
+    })(i);
+
+  // 10 cancellations (update the reservations we just created)
+  for (var i = 0; i < 10; i++)
+    (function (k) {
+      add("cancel reservation #" + k, "Write: cancel reservation",
+        function () {
+          return supa.from("reservations").update({ status: "Cancelled" }).eq("id", resIds[k]);
+        });
+    })(i);
+
+  // 5 schedule updates
+  var schedIds = ["TRN-001", "TRN-002", "TRN-003", "TRN-001", "TRN-003"];
+  for (var i = 0; i < 5; i++)
+    (function (k) {
+      add("update schedule " + schedIds[k] + " #" + k, "Write: update schedule",
+        function () {
+          return supa.from("schedules").update({ status: "ACTIVE" }).eq("id", schedIds[k]);
+        });
+    })(i);
+
+  // ---------- run all requests sequentially, timing each ----------
+  var startWall = Date.now();
+  var t0all = now();
+  for (var r = 0; r < requests.length; r++) {
+    var req = requests[r];
+    var t0 = now();
+    var ok = false, note = "";
     try {
-      var r = fn();
-      record(name, category, !!r.passed, r.note);
+      var res = await req.fn();
+      if (res && res.error) { ok = false; note = res.error.message; }
+      else { ok = true; note = "ok"; }
     } catch (e) {
-      record(name, category, false, "exception: " + (e && e.message ? e.message : e));
+      ok = false; note = "exception: " + (e && e.message ? e.message : e);
     }
+    var ms = now() - t0;
+    results.push({ name: req.name, category: req.category, passed: ok, note: note, ms: ms });
   }
+  var totalMs = now() - t0all;
 
-  // ============================================================
-  // 1) AUTHENTICATION  (20 demands)
-  // ============================================================
-  function loginAttempt(user, pass) {
-    currentUser = null;                 // fresh session per demand
-    setVal("loginUser", user);
-    setVal("loginPass", pass);
-    handleLogin();
-    return currentUser;
-  }
-  var authCases = [
-    ["admin", "admin123", true],
-    ["staff1", "staff123", true],
-    ["staff2", "staff123", true],
-    ["admin", "wrongpass", false],
-    ["ghost", "whatever", false],
-    ["admin", "", false],
-    ["", "admin123", false]
-  ];
-  for (var a = 0; a < 20; a++) {
-    (function () {
-      var c = authCases[a % authCases.length];
-      op("login " + c[0] + "/" + (c[1] || "(empty)"), "Authentication", function () {
-        var u = loginAttempt(c[0], c[1]);
-        var accepted = !!u;
-        var passed = (accepted === c[2]);   // did accept/reject match expectation?
-        return { passed: passed, note: c[2] ? "should accept" : "should reject" };
-      });
-    })();
-  }
-
-  // ============================================================
-  // 2) PASSENGER REGISTRATION  (20 demands)
-  // ============================================================
-  show(renderPassengers());
-  function registerAttempt(name, nid, phone, email) {
-    var before = DB.passengers.length;
-    setVal("pName", name); setVal("pNid", nid); setVal("pPhone", phone); setVal("pEmail", email);
-    registerPass();
-    show(renderPassengers()); // rebuild inputs for the next call
-    return DB.passengers.length - before; // 1 if added, 0 if rejected
-  }
-  for (var r1 = 0; r1 < 15; r1++) {
-    (function (i) {
-      op("register valid passenger #" + i, "Passenger Registration", function () {
-        var added = registerAttempt("Test User " + i, "NID" + (500000 + i), "05000000" + i, "user" + i + "@mail.com");
-        return { passed: added === 1, note: "should create profile" };
-      });
-    })(r1);
-  }
-  // duplicate national ID (uses an existing one) -> should reject
-  op("register duplicate NID", "Passenger Registration", function () {
-    var added = registerAttempt("Dup Person", "123670376", "0500000000", "dup@mail.com");
-    return { passed: added === 0, note: "duplicate NID should reject" };
-  });
-  op("register missing name", "Passenger Registration", function () {
-    var added = registerAttempt("", "NID900001", "0500000001", "x@mail.com");
-    return { passed: added === 0, note: "empty required field should reject" };
-  });
-  op("register missing phone", "Passenger Registration", function () {
-    var added = registerAttempt("No Phone", "NID900002", "", "x@mail.com");
-    return { passed: added === 0, note: "empty required field should reject" };
-  });
-  op("register invalid email", "Passenger Registration", function () {
-    var added = registerAttempt("Bad Email", "NID900003", "0500000003", "notanemail");
-    return { passed: added === 0, note: "invalid email should reject" };
-  });
-  op("register another valid", "Passenger Registration", function () {
-    var added = registerAttempt("Late User", "NID900004", "0500000004", "late@mail.com");
-    return { passed: added === 1, note: "should create profile" };
-  });
-
-  // ============================================================
-  // 3) BOOKING  (25 demands)
-  // ============================================================
-  function bookAttempt(passId, trainId) {
-    show(renderBooking());
-    setVal("bPass", passId);
-    setVal("bTrain", trainId);
-    var before = DB.reservations.length;
-    bookTicket();
-    return DB.reservations.length - before; // 1 if booked, 0 if not
-  }
-  function findSchedule(id) {
-    for (var i = 0; i < DB.schedules.length; i++) if (DB.schedules[i].id === id) return DB.schedules[i];
-    return null;
-  }
-  var somePassId = DB.passengers[0].id;
-
-  // 16 valid bookings across trains that have free seats
-  for (var b = 0; b < 16; b++) {
-    (function (i) {
-      var trainId = (i % 2 === 0) ? "TRN-001" : "TRN-003";
-      op("book valid on " + trainId + " #" + i, "Booking", function () {
-        var s = findSchedule(trainId);
-        var seatsBefore = s.booked;
-        var booked = bookAttempt(somePassId, trainId);
-        var ok = (booked === 1) && (s.booked === seatsBefore + 1);
-        return { passed: ok, note: "valid booking should confirm + decrement seat" };
-      });
-    })(b);
-  }
-  // full train -> should reject
-  for (var b2 = 0; b2 < 3; b2++) {
-    op("book on full train TRN-002 #" + b2, "Booking", function () {
-      var booked = bookAttempt(somePassId, "TRN-002");
-      return { passed: booked === 0, note: "full train should reject" };
-    });
-  }
-  // missing selections -> should reject
-  op("book with no passenger", "Booking", function () {
-    var booked = bookAttempt("", "TRN-001");
-    return { passed: booked === 0, note: "no passenger should reject" };
-  });
-  op("book with no train", "Booking", function () {
-    var booked = bookAttempt(somePassId, "");
-    return { passed: booked === 0, note: "no train should reject" };
-  });
-  // adversarial / robustness probes
-  op("book on non-existent train TRN-999", "Booking", function () {
-    var booked = bookAttempt(somePassId, "TRN-999");
-    return { passed: booked === 0, note: "unknown train id should be handled, not crash" };
-  });
-  op("book on non-existent train ZZZ", "Booking", function () {
-    var booked = bookAttempt(somePassId, "ZZZ");
-    return { passed: booked === 0, note: "unknown train id should be handled, not crash" };
-  });
-  op("book with invalid passenger id 99999", "Booking", function () {
-    var booked = bookAttempt("99999", "TRN-001");
-    return { passed: booked === 0 || booked === 1, note: "unknown passenger id should be handled, not crash" };
-  });
-  op("book after archiving the train", "Booking", function () {
-    var s = findSchedule("TRN-003"); var prev = s.status;
-    s.status = "ARCHIVE";
-    var booked = bookAttempt(somePassId, "TRN-003");
-    s.status = prev;
-    return { passed: booked === 0, note: "archived train should not accept bookings" };
-  });
-
-  // ============================================================
-  // 4) SCHEDULE MANAGEMENT  (15 demands)
-  // ============================================================
-  function addScheduleAttempt(id, route, dep, arr, seats, price) {
-    show(renderSchedules());
-    setVal("sId", id); setVal("sRoute", route); setVal("sDep", dep);
-    setVal("sArr", arr); setVal("sSeats", seats); setVal("sPrice", price);
-    var before = DB.schedules.length;
-    addSchedule();
-    return DB.schedules.length - before;
-  }
-  for (var s1 = 0; s1 < 9; s1++) {
-    (function (i) {
-      op("create valid schedule #" + i, "Schedule Mgmt", function () {
-        var added = addScheduleAttempt("NEW-" + i, "CITY" + i + " TO CITY" + (i + 1),
-          "Apr 20, 2026 9:00 AM", "Apr 20, 2026 3:00 PM", "100", "60");
-        return { passed: added === 1, note: "valid schedule should be created" };
-      });
-    })(s1);
-  }
-  op("create duplicate schedule id", "Schedule Mgmt", function () {
-    var added = addScheduleAttempt("TRN-001", "DUP TO DUP", "d", "a", "50", "40");
-    return { passed: added === 0, note: "duplicate id should reject" };
-  });
-  op("create schedule zero seats", "Schedule Mgmt", function () {
-    var added = addScheduleAttempt("ZERO-1", "A TO B", "d", "a", "0", "40");
-    return { passed: added === 0, note: "zero seats should reject" };
-  });
-  op("create schedule negative price", "Schedule Mgmt", function () {
-    var added = addScheduleAttempt("NEG-1", "A TO B", "d", "a", "50", "-5");
-    return { passed: added === 0, note: "negative price should reject" };
-  });
-  op("create schedule missing route", "Schedule Mgmt", function () {
-    var added = addScheduleAttempt("MISS-1", "", "d", "a", "50", "40");
-    return { passed: added === 0, note: "missing field should reject" };
-  });
-  op("edit schedule price", "Schedule Mgmt", function () {
-    PROMPT_ANSWER = "77";
-    var s = findSchedule("TRN-001");
-    editSchedule("TRN-001");
-    PROMPT_ANSWER = null;
-    return { passed: s.price === 77, note: "price should update" };
-  });
-  op("archive (delete) schedule", "Schedule Mgmt", function () {
-    CONFIRM_ANSWER = true;
-    deleteSchedule("NEW-0");
-    var s = findSchedule("NEW-0");
-    return { passed: s && s.status === "ARCHIVE", note: "schedule should be archived" };
-  });
-
-  // ============================================================
-  // 5) CANCELLATION  (5 demands)
-  // ============================================================
-  function firstConfirmedId() {
-    for (var i = 0; i < DB.reservations.length; i++)
-      if (DB.reservations[i].status === "Confirmed") return DB.reservations[i].id;
-    return null;
-  }
-  for (var c = 0; c < 4; c++) {
-    op("cancel confirmed reservation #" + c, "Cancellation", function () {
-      CONFIRM_ANSWER = true;
-      var id = firstConfirmedId();
-      if (!id) return { passed: true, note: "no confirmed reservation left (ok)" };
-      cancelRes(id);
-      var res = null;
-      for (var i = 0; i < DB.reservations.length; i++) if (DB.reservations[i].id === id) res = DB.reservations[i];
-      return { passed: res && res.status === "Cancelled", note: "status should become Cancelled" };
-    });
-  }
-  op("cancel then decline prompt", "Cancellation", function () {
-    CONFIRM_ANSWER = false; // user says "No"
-    var id = firstConfirmedId();
-    var before = id ? "Confirmed" : null;
-    if (id) cancelRes(id);
-    CONFIRM_ANSWER = true;
-    var res = null;
-    for (var i = 0; i < DB.reservations.length; i++) if (DB.reservations[i].id === id) res = DB.reservations[i];
-    return { passed: !id || (res && res.status === before), note: "declining should keep it Confirmed" };
-  });
-
-  // ============================================================
-  // 6) PAGE RENDERING  (5 demands)
-  // ============================================================
-  var renderers = [
-    ["render dashboard", renderDashboard],
-    ["render reservations", renderReservations],
-    ["render reports", renderReports],
-    ["render schedules", renderSchedules],
-    ["render passengers", renderPassengers]
-  ];
-  for (var d = 0; d < renderers.length; d++) {
-    (function (rr) {
-      op(rr[0], "Rendering", function () {
-        var html = rr[1]();
-        return { passed: typeof html === "string" && html.length > 0, note: "page should render without error" };
-      });
-    })(renderers[d]);
-  }
-
-  // ============================================================
-  // 7) REQUIREMENTS CORRECTNESS  (10 demands)
-  // A demand fails if the system's OUTPUT is wrong for the spec,
-  // even when nothing crashes. These probe real, documented defects.
-  // ============================================================
-
-  // S-18: dashboard total-trains must reflect real data (correct in code)
-  op("dashboard trains count is real", "Requirements", function () {
-    var html = renderDashboard();
-    var ok = html.indexOf('>' + DB.schedules.length + '</div><div class="stat-lbl">Trains</div>') !== -1;
-    return { passed: ok, note: "trains stat should equal number of schedules" };
-  });
-  // S-18: dashboard active-bookings must reflect confirmed reservations (correct in code)
-  op("dashboard bookings count is real", "Requirements", function () {
-    var conf = 0;
-    for (var i = 0; i < DB.reservations.length; i++) if (DB.reservations[i].status === "Confirmed") conf++;
-    var html = renderDashboard();
-    var ok = html.indexOf('>' + conf + '</div><div class="stat-lbl">Bookings</div>') !== -1;
-    return { passed: ok, note: "bookings stat should equal confirmed reservations" };
-  });
-  // S-19: dashboard occupancy % must be computed from booked/seats (correct in code)
-  op("dashboard occupancy is computed", "Requirements", function () {
-    var s = DB.schedules[0];
-    var pct = Math.round(s.booked / s.seats * 100);
-    var html = renderDashboard();
-    return { passed: html.indexOf(pct + "%") !== -1, note: "occupancy should be booked/seats" };
-  });
-  // S-21: reports total-bookings must reflect real data (correct in code)
-  op("reports bookings count is real", "Requirements", function () {
-    var conf = 0;
-    for (var i = 0; i < DB.reservations.length; i++) if (DB.reservations[i].status === "Confirmed") conf++;
-    var html = renderReports();
-    var ok = html.indexOf('>' + conf + '</div><div class="stat-lbl">TOTAL BOOKINGS TODAY</div>') !== -1;
-    return { passed: ok, note: "today bookings should equal confirmed reservations" };
-  });
-  // S-18 DEFECT: passenger count is hard-coded 250, not the real total
-  op("dashboard passenger count is real", "Requirements", function () {
-    var html = renderDashboard();
-    var ok = html.indexOf('>' + DB.passengers.length + '</div><div class="stat-lbl">Passengers</div>') !== -1;
-    return { passed: ok, note: "passengers stat is hard-coded 250 (should be DB total)" };
-  });
-  // S-18 DEFECT: revenue is hard-coded 10000, not computed from bookings
-  op("dashboard revenue is computed", "Requirements", function () {
-    var html = renderDashboard();
-    var hardcoded = html.indexOf('>10000</div><div class="stat-lbl">Revenue</div>') !== -1;
-    return { passed: !hardcoded, note: "revenue is hard-coded 10000, not computed" };
-  });
-  // S-23 DEFECT: reports "revenue today" is hard-coded 1500 SAR
-  op("reports revenue today is computed", "Requirements", function () {
-    var html = renderReports();
-    var hardcoded = html.indexOf('>1500 SAR</div>') !== -1;
-    return { passed: !hardcoded, note: "revenue today is hard-coded 1500 SAR" };
-  });
-  // S-15 DEFECT: confirmation Booking ID differs from the stored reservation ID
-  op("confirmation ID matches stored reservation", "Requirements", function () {
-    show(renderBooking());
-    setVal("bPass", somePassId); setVal("bTrain", "TRN-001");
-    bookTicket();
-    var conf = $("bookConf").innerHTML;
-    var m = conf.match(/Booking ID:\s*([0-9]+)/);
-    var shownId = m ? m[1] : null;
-    var storedId = DB.reservations[DB.reservations.length - 1].id; // "#BK-00xxx"
-    var ok = shownId !== null && ("#BK-" + shownId === storedId || shownId === storedId);
-    return { passed: ok, note: "shown ID (" + shownId + ") differs from stored ID (" + storedId + ")" };
-  });
-  // S-13 DEFECT: stored reservation record has no price field
-  op("stored reservation includes price", "Requirements", function () {
-    var last = DB.reservations[DB.reservations.length - 1];
-    return { passed: last.hasOwnProperty("price"), note: "reservation record stores no price" };
-  });
-  // Data integrity: every reservation.train should match a real schedule route
-  op("reservations reference real schedules", "Requirements", function () {
-    var routes = {};
-    for (var i = 0; i < DB.schedules.length; i++) routes[DB.schedules[i].route] = true;
-    var allValid = true;
-    for (var j = 0; j < DB.reservations.length; j++) {
-      if (!routes[DB.reservations[j].train]) { allValid = false; break; }
-    }
-    return { passed: allValid, note: "seed reservations use train names not in the schedule table" };
-  });
-
-  // ============================================================
-  // METRICS
-  // ============================================================
+  // ---------- metrics ----------
   var n = results.length;
-  var failures = 0;
-  for (var i = 0; i < results.length; i++) if (!results[i].passed) failures++;
+  var failures = 0, sumMs = 0;
+  for (var i = 0; i < results.length; i++) { if (!results[i].passed) failures++; sumMs += results[i].ms; }
   var successes = n - failures;
 
-  var T = OBSERVATION_PERIOD_HOURS;
-  var mttr = MTTR_HOURS;
+  var T = OBSERVATION_PERIOD_HOURS, mttr = MTTR_HOURS;
   var pofod = failures / n;
-  var rocof = failures / T;                         // failures per hour
-  var mtbf = failures > 0 ? T / failures : Infinity; // hours between failures
-  var availability = failures > 0 ? mtbf / (mtbf + mttr) : 1;
+  var rocof = failures / T;
+  var mtbf = failures > 0 ? T / failures : Infinity;
+  var availTime = failures > 0 ? mtbf / (mtbf + mttr) : 1;
+  var availObserved = successes / n;
 
   var metrics = {
-    demands: n,
-    successes: successes,
-    failures: failures,
-    observationPeriodHours: T,
-    mttrHours: mttr,
-    POFOD: pofod,
-    ROCOF_per_hour: rocof,
-    MTBF_hours: mtbf,
-    Availability: availability
+    demands: n, successes: successes, failures: failures,
+    measuredElapsedSeconds: (totalMs / 1000),
+    avgLatencyMs: (sumMs / n),
+    observationPeriodHours: T, mttrHours: mttr,
+    POFOD: pofod, ROCOF_per_hour: rocof,
+    MTBF_hours: (mtbf === Infinity ? null : mtbf),
+    Availability_observed: availObserved,
+    Availability_timeModel: availTime
   };
 
-  // ---- text summary (always logged; visible in the browser console too) ----
-  var lines = [];
-  lines.push("===== SIKKA RELIABILITY RESULTS =====");
-  lines.push("Total demands (requests): " + n);
-  lines.push("Successes: " + successes + "   Failures: " + failures);
-  lines.push("Observation period T: " + T + " h    MTTR: " + mttr + " h");
-  lines.push("POFOD  = f/n         = " + failures + "/" + n + " = " + pofod.toFixed(4));
-  lines.push("ROCOF  = f/T         = " + failures + "/" + T + " = " + rocof.toFixed(4) + " failures/hour");
-  lines.push("MTBF   = T/f         = " + (failures > 0 ? (T + "/" + failures + " = " + mtbf.toFixed(3) + " hours") : "no failures observed (infinite)"));
-  lines.push("Availability = MTBF/(MTBF+MTTR) = " + (availability * 100).toFixed(3) + "%");
-  lines.push("");
+  // ---------- text summary ----------
+  var L = [];
+  L.push("===== SIKKA RELIABILITY RESULTS (real Supabase requests) =====");
+  L.push("Run started: " + new Date(startWall).toLocaleString());
+  L.push("Total requests (demands): " + n);
+  L.push("Successes: " + successes + "   Failures: " + failures);
+  L.push("Measured run time: " + (totalMs / 1000).toFixed(2) + " s   Avg latency: " + (sumMs / n).toFixed(1) + " ms");
+  L.push("");
+  L.push("POFOD = f/n = " + failures + "/" + n + " = " + pofod.toFixed(4));
+  L.push("Observed availability = successes/n = " + successes + "/" + n + " = " + (availObserved * 100).toFixed(2) + "%");
+  L.push("");
+  L.push("Using observation period T = " + T + " h and MTTR = " + mttr + " h:");
+  L.push("  ROCOF = f/T = " + failures + "/" + T + " = " + rocof.toFixed(4) + " failures/hour");
+  L.push("  MTBF  = T/f = " + (failures > 0 ? (T + "/" + failures + " = " + mtbf.toFixed(3) + " h") : "no failures (infinite)"));
+  L.push("  Availability = MTBF/(MTBF+MTTR) = " + (availTime * 100).toFixed(3) + "%");
+  L.push("");
   var byCat = {};
   for (var i = 0; i < results.length; i++) {
-    var c = results[i].category;
-    byCat[c] = byCat[c] || { total: 0, fail: 0 };
+    var c = results[i].category; byCat[c] = byCat[c] || { total: 0, fail: 0 };
     byCat[c].total++; if (!results[i].passed) byCat[c].fail++;
   }
-  lines.push("Failures by category:");
-  for (var cat in byCat) lines.push("  " + cat + ": " + byCat[cat].fail + " / " + byCat[cat].total);
-  var summaryText = lines.join("\n");
-  console.log(summaryText);
+  L.push("By request type (failures / total):");
+  for (var cat in byCat) L.push("  " + cat + ": " + byCat[cat].fail + " / " + byCat[cat].total);
+  var summary = L.join("\n");
+  if (typeof console !== "undefined") console.log(summary);
 
-  // ---- on-screen table (browser) ----
-  var host = $("relResults");
-  if (host) {
-    var html = "<pre style='background:#f6f8fa;padding:14px;border-radius:8px;white-space:pre-wrap'>" + summaryText + "</pre>";
-    html += "<table border='1' cellpadding='6' cellspacing='0' style='border-collapse:collapse;font-size:12px;width:100%'>";
-    html += "<tr style='background:#1f3a5f;color:#fff'><th>#</th><th>Operation</th><th>Category</th><th>Result</th><th>Note</th></tr>";
-    for (var i = 0; i < results.length; i++) {
-      var r = results[i];
-      html += "<tr style='background:" + (r.passed ? "#eafaef" : "#fdecea") + "'>" +
-        "<td>" + (i + 1) + "</td><td>" + r.name + "</td><td>" + r.category + "</td>" +
-        "<td><b>" + (r.passed ? "PASS" : "FAIL") + "</b></td><td>" + r.note + "</td></tr>";
+  // ---------- on-screen table (browser) ----------
+  if (typeof document !== "undefined") {
+    var host = document.getElementById("relResults");
+    if (host) {
+      var html = "<pre style='background:#f6f8fa;padding:14px;border-radius:8px;white-space:pre-wrap'>" + summary + "</pre>";
+      html += "<table border='1' cellpadding='6' cellspacing='0' style='border-collapse:collapse;font-size:12px;width:100%'>";
+      html += "<tr style='background:#1f3a5f;color:#fff'><th>#</th><th>Request</th><th>Type</th><th>Result</th><th>ms</th><th>Note</th></tr>";
+      for (var i = 0; i < results.length; i++) {
+        var x = results[i];
+        html += "<tr style='background:" + (x.passed ? "#eafaef" : "#fdecea") + "'>" +
+          "<td>" + (i + 1) + "</td><td>" + x.name + "</td><td>" + x.category + "</td>" +
+          "<td><b>" + (x.passed ? "PASS" : "FAIL") + "</b></td><td>" + x.ms.toFixed(0) + "</td><td>" + x.note + "</td></tr>";
+      }
+      html += "</table>";
+      host.innerHTML = html;
     }
-    html += "</table>";
-    host.innerHTML = html;
   }
 
-  // expose for the headless (jsdom) verification run
-  if (typeof window !== "undefined") { window.__SIKKA_METRICS = metrics; window.__SIKKA_RESULTS = results; }
-})();
+  return { metrics: metrics, results: results, summary: summary };
+}
+
+// auto-run in the browser; export for Node verification
+if (typeof document !== "undefined") { runReliability(); }
+if (typeof module !== "undefined" && module.exports) { module.exports = { runReliability: runReliability }; }
