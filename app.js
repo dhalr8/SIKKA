@@ -1,11 +1,13 @@
 // ============================================================
-// SIKKA Application Logic
-// Each team member's section is clearly marked below.
+// SIKKA Application Logic  (REAL Supabase version)
+// Render functions read from the DB cache (filled by loadAll()).
+// Every ACTION that changes data now writes to Supabase, then calls
+// navigate(page) which reloads from the DB and re-renders.
 // ============================================================
 
 
 // ============================================================
-// LANA — Dashboard (S-18, S-19) + Users (S-02, S-03) + Audit (S-26, S-27)
+// LANA — Dashboard + Users + Audit
 // ============================================================
 
 function renderDashboard() {
@@ -13,12 +15,17 @@ function renderDashboard() {
   for (var i = 0; i < DB.reservations.length; i++) {
     if (DB.reservations[i].status === "Confirmed") conf++;
   }
+  var revenue = 0;
+  for (var i = 0; i < DB.reservations.length; i++) {
+    if (DB.reservations[i].status === "Confirmed" && DB.reservations[i].price) revenue += Number(DB.reservations[i].price);
+  }
+
   var h = topNav() + '<h2>Dashboard</h2>';
   h += '<div class="stats-row">';
   h += '<div class="stat-card"><div class="stat-val">' + DB.schedules.length + '</div><div class="stat-lbl">Trains</div></div>';
-  h += '<div class="stat-card"><div class="stat-val">250</div><div class="stat-lbl">Passengers</div></div>';
+  h += '<div class="stat-card"><div class="stat-val">' + DB.passengers.length + '</div><div class="stat-lbl">Passengers</div></div>';
   h += '<div class="stat-card"><div class="stat-val">' + conf + '</div><div class="stat-lbl">Bookings</div></div>';
-  h += '<div class="stat-card"><div class="stat-val">10000</div><div class="stat-lbl">Revenue</div></div>';
+  h += '<div class="stat-card"><div class="stat-val">' + revenue + '</div><div class="stat-lbl">Revenue (SAR)</div></div>';
   h += '</div>';
   h += '<div style="display:flex;gap:16px;flex-wrap:wrap">';
   h += '<div class="card" style="flex:1 1 380px;padding:16px"><div style="font-size:13px;font-weight:600;color:#4CAF50;margin-bottom:12px">Train Occupancy</div>';
@@ -33,8 +40,15 @@ function renderDashboard() {
   }
   h += '</div>';
   h += '<div class="card" style="flex:1 1 250px;padding:16px"><div style="font-size:13px;font-weight:600;margin-bottom:12px">Alerts</div>';
-  h += '<div style="background:#FFEBEE;border-radius:5px;padding:6px 10px;font-size:10px;font-weight:600;color:#e53935;margin-bottom:10px">Delayed Trains</div>';
-  h += '<div style="font-size:12px;padding:6px 0">🚆 Riyadh Express delayed</div>';
+  h += '<div style="background:#FFEBEE;border-radius:5px;padding:6px 10px;font-size:10px;font-weight:600;color:#e53935;margin-bottom:10px">Full Trains</div>';
+  var anyFull = false;
+  for (var i = 0; i < DB.schedules.length; i++) {
+    if (DB.schedules[i].booked >= DB.schedules[i].seats) {
+      h += '<div style="font-size:12px;padding:6px 0">🚆 ' + DB.schedules[i].route + ' is full</div>';
+      anyFull = true;
+    }
+  }
+  if (!anyFull) h += '<div style="font-size:12px;padding:6px 0;color:#999">No full trains.</div>';
   h += '</div></div>';
   return h;
 }
@@ -52,25 +66,28 @@ function renderUsers() {
   return h;
 }
 
-function assignRole(id) {
-  for (var i = 0; i < DB.users.length; i++) {
-    if (DB.users[i].id === id) {
-      var nr = prompt("Role for " + DB.users[i].username + " (Administrator / Staff):", DB.users[i].role);
-      if (nr === "Administrator" || nr === "Staff") { DB.users[i].role = nr; navigate("users"); }
-      break;
-    }
-  }
+// S-02: Assign role (writes to DB)
+async function assignRole(id) {
+  var u = DB.users.find(function (x) { return x.id === id; });
+  if (!u) return;
+  var nr = prompt("Role for " + u.username + " (Administrator / Staff):", u.role);
+  if (nr !== "Administrator" && nr !== "Staff") return;
+  var res = await supa.from("users").update({ role: nr }).eq("id", id);
+  if (dbErr(res, "assign role")) return;
+  await supa.from("audit_log").insert({ actor: currentUser.username, action: "Assign Role", detail: u.username + " -> " + nr });
+  navigate("users");
 }
 
-function resetPass(id) {
-  for (var i = 0; i < DB.users.length; i++) {
-    if (DB.users[i].id === id) {
-      var tmp = "temp" + Math.floor(1000 + Math.random() * 9000);
-      DB.users[i].password = tmp;
-      alert("Temporary password for " + DB.users[i].username + ": " + tmp);
-      break;
-    }
-  }
+// S-03: Reset password (writes a new salted hash to DB)
+async function resetPass(id) {
+  var u = DB.users.find(function (x) { return x.id === id; });
+  if (!u) return;
+  var tmp = "temp" + Math.floor(1000 + Math.random() * 9000);
+  var newHash = await sha256Hex(u.salt + tmp);
+  var res = await supa.from("users").update({ hash: newHash }).eq("id", id);
+  if (dbErr(res, "reset password")) return;
+  await supa.from("audit_log").insert({ actor: currentUser.username, action: "Reset Password", detail: "Reset " + u.username });
+  alert("Temporary password for " + u.username + ": " + tmp);
 }
 
 function renderAudit() {
@@ -79,33 +96,34 @@ function renderAudit() {
   h += '<div class="card"><table><thead><tr><th>TIMESTAMP</th><th>USER</th><th>ACTION</th><th>DETAILS</th></tr></thead><tbody>';
   for (var i = DB.auditLog.length - 1; i >= 0; i--) {
     var a = DB.auditLog[i];
-    h += '<tr><td>' + a.time + '</td><td><b>' + a.user + '</b></td><td>' + bdg(a.action) + '</td><td>' + a.detail + '</td></tr>';
+    h += '<tr><td>' + new Date(a.time).toLocaleString() + '</td><td><b>' + a.user + '</b></td><td>' + bdg(a.action) + '</td><td>' + a.detail + '</td></tr>';
   }
   h += '</tbody></table></div>';
   return h;
 }
 
-function runBackup() {
-  DB.auditLog.push({time: new Date().toLocaleString(), user:"system", action:"Backup", detail:"Database backup completed"});
-  alert("Backup completed.\nTables: Users, Schedules, Passengers, Reservations, AuditLog");
+// S-26: Backup (records an entry in the real audit_log)
+async function runBackup() {
+  var res = await supa.from("audit_log").insert({ actor: "system", action: "Backup", detail: "Database backup completed" });
+  if (dbErr(res, "backup")) return;
+  alert("Backup logged.\nTables: users, schedules, passengers, reservations, audit_log");
   navigate("audit");
 }
 
 
 // ============================================================
-// DANAH — Schedules (S-04, S-05, S-06, S-07, S-08)
+// DANAH — Schedules
 // ============================================================
 
 function renderSchedules() {
-  var active = [];
-  var archived = [];
+  var active = [], archived = [];
   for (var i = 0; i < DB.schedules.length; i++) {
     if (DB.schedules[i].status === "ARCHIVE") archived.push(DB.schedules[i]);
     else active.push(DB.schedules[i]);
   }
   var avgOcc = 0;
   for (var i = 0; i < DB.schedules.length; i++) avgOcc += DB.schedules[i].booked / DB.schedules[i].seats;
-  avgOcc = Math.round(avgOcc / DB.schedules.length * 100);
+  avgOcc = DB.schedules.length ? Math.round(avgOcc / DB.schedules.length * 100) : 0;
 
   var h = topNav() + '<h2>Train Schedules</h2>';
   h += '<div class="stats-row">';
@@ -168,44 +186,52 @@ function showArchived() {
   if (f) f.style.display = f.style.display === "none" ? "block" : "none";
 }
 
-function addSchedule() {
-  var id = document.getElementById("sId").value;
-  var route = document.getElementById("sRoute").value;
+// S-04: Create schedule (INSERT)
+async function addSchedule() {
+  var id = document.getElementById("sId").value.trim();
+  var route = document.getElementById("sRoute").value.trim();
   var seats = document.getElementById("sSeats").value;
   var price = document.getElementById("sPrice").value;
   var msg = document.getElementById("schedMsg");
+
   if (!id || !route || !seats || !price) { msg.innerHTML = '<div class="alert-err">All fields required.</div>'; return; }
-  for (var i = 0; i < DB.schedules.length; i++) {
-    if (DB.schedules[i].id === id) { msg.innerHTML = '<div class="alert-err">Train ID already exists.</div>'; return; }
-  }
-  if (parseInt(seats) <= 0 || parseFloat(price) <= 0) { msg.innerHTML = '<div class="alert-err">Seats and price must be positive.</div>'; return; }
-  DB.schedules.push({id:id, route:route, dep:document.getElementById("sDep").value || "Apr 20, 2026 9:00 AM",
-    arr:document.getElementById("sArr").value || "Apr 20, 2026 3:00 PM", seats:parseInt(seats), booked:0, price:parseFloat(price), status:"ACTIVE"});
+  if (DB.schedules.find(function (s) { return s.id === id; })) { msg.innerHTML = '<div class="alert-err">Train ID already exists.</div>'; return; }
+  if (parseInt(seats, 10) <= 0 || parseFloat(price) <= 0) { msg.innerHTML = '<div class="alert-err">Seats and price must be positive.</div>'; return; }
+
+  var res = await supa.from("schedules").insert({
+    id: id, route: route,
+    dep: document.getElementById("sDep").value || "Apr 20, 2026 9:00 AM",
+    arr: document.getElementById("sArr").value || "Apr 20, 2026 3:00 PM",
+    seats: parseInt(seats, 10), booked: 0, price: parseFloat(price), status: "ACTIVE"
+  });
+  if (dbErr(res, "create schedule")) return;
+  await supa.from("audit_log").insert({ actor: currentUser.username, action: "Create Schedule", detail: "Created " + id });
   navigate("schedules");
 }
 
-function editSchedule(id) {
-  for (var i = 0; i < DB.schedules.length; i++) {
-    if (DB.schedules[i].id === id) {
-      var np = prompt("Update price for " + DB.schedules[i].route + " (current: " + DB.schedules[i].price + " SAR):", DB.schedules[i].price);
-      if (np && !isNaN(np)) { DB.schedules[i].price = parseFloat(np); navigate("schedules"); }
-      break;
-    }
-  }
+// S-05: Edit price (UPDATE)
+async function editSchedule(id) {
+  var s = DB.schedules.find(function (x) { return x.id === id; });
+  if (!s) return;
+  var np = prompt("Update price for " + s.route + " (current: " + s.price + " SAR):", s.price);
+  if (!np || isNaN(np)) return;
+  var res = await supa.from("schedules").update({ price: parseFloat(np) }).eq("id", id);
+  if (dbErr(res, "update schedule")) return;
+  navigate("schedules");
 }
 
-function deleteSchedule(id) {
-  if (confirm("Archive schedule " + id + "?")) {
-    for (var i = 0; i < DB.schedules.length; i++) {
-      if (DB.schedules[i].id === id) { DB.schedules[i].status = "ARCHIVE"; break; }
-    }
-    navigate("schedules");
-  }
+// S-06: Archive (UPDATE status)
+async function deleteSchedule(id) {
+  if (!confirm("Archive schedule " + id + "?")) return;
+  var res = await supa.from("schedules").update({ status: "ARCHIVE" }).eq("id", id);
+  if (dbErr(res, "archive schedule")) return;
+  await supa.from("audit_log").insert({ actor: currentUser.username, action: "Archive Schedule", detail: "Archived " + id });
+  navigate("schedules");
 }
 
 
 // ============================================================
-// MUNIRAH — Passengers (S-09, S-10, S-11)
+// MUNIRAH — Passengers
 // ============================================================
 
 function renderPassengers() {
@@ -224,9 +250,7 @@ function renderPassengers() {
 
   h += '<div class="card"><table><thead><tr><th>NAME</th><th>ID</th><th>PHONE</th><th>EMAIL</th><th>STATUS</th><th>ACTIONS</th></tr></thead>';
   h += '<tbody id="passBody">';
-  for (var i = 0; i < DB.passengers.length; i++) {
-    h += passRow(DB.passengers[i]);
-  }
+  for (var i = 0; i < DB.passengers.length; i++) h += passRow(DB.passengers[i]);
   h += '</tbody></table></div>' + pgn();
   return h;
 }
@@ -237,44 +261,47 @@ function passRow(p) {
     '<td><button class="btn btn-o btn-sm" onclick="editPassenger(' + p.id + ')">Edit</button></td></tr>';
 }
 
-function registerPass() {
-  var name = document.getElementById("pName").value;
-  var nid = document.getElementById("pNid").value;
-  var phone = document.getElementById("pPhone").value;
-  var email = document.getElementById("pEmail").value;
+// S-09: Register passenger (INSERT)
+async function registerPass() {
+  var name = document.getElementById("pName").value.trim();
+  var nid = document.getElementById("pNid").value.trim();
+  var phone = document.getElementById("pPhone").value.trim();
+  var email = document.getElementById("pEmail").value.trim();
   var msg = document.getElementById("passMsg");
+
   if (!name || !nid || !phone) { msg.innerHTML = '<div class="alert-err">Name, ID, and phone are required.</div>'; return; }
   if (email && email.indexOf("@") === -1) { msg.innerHTML = '<div class="alert-err">Invalid email format.</div>'; return; }
-  for (var i = 0; i < DB.passengers.length; i++) {
-    if (DB.passengers[i].nid === nid) { msg.innerHTML = '<div class="alert-err">Passenger with this ID already exists.</div>'; return; }
-  }
-  DB.passengers.push({id: DB.nextPass++, name:name, nid:nid, phone:phone, email:email || ""});
+  if (DB.passengers.find(function (p) { return p.nid === nid; })) { msg.innerHTML = '<div class="alert-err">Passenger with this ID already exists.</div>'; return; }
+
+  // id is a serial column — do NOT send it; Supabase assigns it.
+  var res = await supa.from("passengers").insert({ name: name, nid: nid, phone: phone, email: email || "" });
+  if (dbErr(res, "register passenger")) return;
+  await supa.from("audit_log").insert({ actor: currentUser.username, action: "Register Passenger", detail: "Registered " + name });
   navigate("passengers");
 }
 
-function editPassenger(id) {
-  for (var i = 0; i < DB.passengers.length; i++) {
-    if (DB.passengers[i].id === id) {
-      var p = DB.passengers[i];
-      var nn = prompt("Update name (" + p.name + "):", p.name);
-      var np = prompt("Update phone (" + p.phone + "):", p.phone);
-      var ne = prompt("Update email (" + p.email + "):", p.email);
-      if (nn) p.name = nn;
-      if (np) p.phone = np;
-      if (ne) p.email = ne;
-      navigate("passengers");
-      break;
-    }
-  }
+// S-10: Update passenger (UPDATE)
+async function editPassenger(id) {
+  var p = DB.passengers.find(function (x) { return x.id === id; });
+  if (!p) return;
+  var nn = prompt("Update name (" + p.name + "):", p.name);
+  var np = prompt("Update phone (" + p.phone + "):", p.phone);
+  var ne = prompt("Update email (" + p.email + "):", p.email);
+  var res = await supa.from("passengers").update({
+    name: nn || p.name, phone: np || p.phone, email: ne || p.email
+  }).eq("id", id);
+  if (dbErr(res, "update passenger")) return;
+  navigate("passengers");
 }
 
+// S-11: Search (client-side over loaded rows — no DB round trip needed)
 function filterPassengers() {
   var term = document.getElementById("passSearch").value.toLowerCase();
   var body = document.getElementById("passBody");
   var html = "";
   for (var i = 0; i < DB.passengers.length; i++) {
     var p = DB.passengers[i];
-    if (p.name.toLowerCase().indexOf(term) !== -1 || p.nid.indexOf(term) !== -1 || p.email.toLowerCase().indexOf(term) !== -1) {
+    if (p.name.toLowerCase().indexOf(term) !== -1 || String(p.nid).indexOf(term) !== -1 || (p.email || "").toLowerCase().indexOf(term) !== -1) {
       html += passRow(p);
     }
   }
@@ -284,7 +311,7 @@ function filterPassengers() {
 
 
 // ============================================================
-// NAWAL — Booking (S-13, S-14, S-15)
+// NAWAL — Booking
 // ============================================================
 
 function renderBooking() {
@@ -306,21 +333,18 @@ function renderBooking() {
   h += '<div><div style="font-size:11px;font-weight:600;margin-bottom:3px">Select Train:</div><select id="bTrain" class="bk-sel"><option value="">-- Select --</option>';
   for (var i = 0; i < DB.schedules.length; i++) {
     var s = DB.schedules[i];
-    if (s.status !== "ARCHIVE") {
-      h += '<option value="' + s.id + '">' + s.route + ' (' + (s.seats - s.booked) + ' left)</option>';
-    }
+    if (s.status !== "ARCHIVE") h += '<option value="' + s.id + '">' + s.route + ' (' + (s.seats - s.booked) + ' left)</option>';
   }
   h += '</select></div>';
   h += '<div><div style="font-size:11px;font-weight:600;margin-bottom:3px">Ticket:</div><select class="bk-sel"><option>VIP ticket</option><option>Economy</option></select></div>';
-  h += '<div><div style="font-size:11px;font-weight:600;margin-bottom:3px">Destination:</div><select class="bk-sel"><option>MAKKAH</option><option>RIYADH</option><option>JEDDAH</option><option>DAMMAM</option></select></div>';
-  h += '<div><div style="font-size:11px;font-weight:600;margin-bottom:3px">Time:</div><select class="bk-sel"><option>2:45PM</option><option>8:00AM</option><option>10:00AM</option></select></div>';
   h += '<div><div style="font-size:11px;font-weight:600;margin-bottom:3px">Payment:</div><select class="bk-sel"><option>Wallet</option><option>Card</option><option>Cash</option></select></div>';
-  h += '<div style="display:flex;align-items:flex-end"><button class="bk-btn" onclick="bookTicket()">BOOK NOW</button></div>';
+  h += '<div style="display:flex;align-items:flex-end;grid-column:1/4"><button class="bk-btn" onclick="bookTicket()">BOOK NOW</button></div>';
   h += '</div></div></div>';
   return h;
 }
 
-function bookTicket() {
+// S-13/S-14/S-15: Book (validate seats, INSERT reservation, UPDATE booked count)
+async function bookTicket() {
   var passId = document.getElementById("bPass").value;
   var trainId = document.getElementById("bTrain").value;
   var msg = document.getElementById("bookMsg");
@@ -329,31 +353,31 @@ function bookTicket() {
   if (!passId) { msg.innerHTML = '<div class="alert-err">Please select a registered passenger.</div>'; conf.innerHTML = ""; return; }
   if (!trainId) { msg.innerHTML = '<div class="alert-err">Please select a train.</div>'; conf.innerHTML = ""; return; }
 
-  var s = null;
-  for (var i = 0; i < DB.schedules.length; i++) {
-    if (DB.schedules[i].id === trainId) { s = DB.schedules[i]; break; }
-  }
+  var s = DB.schedules.find(function (x) { return x.id === trainId; });
+  if (!s) return;
+  if (s.booked >= s.seats) { msg.innerHTML = '<div class="alert-err">No seats available on this train.</div>'; conf.innerHTML = ""; return; }
 
-  if (s.booked >= s.seats) {
-    msg.innerHTML = '<div class="alert-err">No seats available on this train.</div>';
-    conf.innerHTML = "";
-    return;
-  }
-
-  var p = null;
-  for (var i = 0; i < DB.passengers.length; i++) {
-    if (DB.passengers[i].id === parseInt(passId)) { p = DB.passengers[i]; break; }
-  }
-
+  var p = DB.passengers.find(function (x) { return x.id === parseInt(passId, 10); });
   var seat = String.fromCharCode(65 + Math.floor(Math.random() * 4)) + Math.floor(Math.random() * 40 + 1);
-  var bid = Math.floor(100000000 + Math.random() * 900000000);
-  s.booked++;
-  DB.reservations.push({id:"#BK-" + String(DB.nextRes++).padStart(5,"0"), passenger:p.name, train:s.route, date:new Date().toLocaleDateString(), seat:seat, status:"Confirmed"});
+  var newId = nextResId();
+
+  // 1) create the reservation
+  var r1 = await supa.from("reservations").insert({
+    id: newId, passenger: p.name, train: s.route,
+    date: new Date().toLocaleDateString(), seat: seat, status: "Confirmed", price: s.price
+  });
+  if (dbErr(r1, "create reservation")) return;
+
+  // 2) decrement available seats (booked + 1)
+  var r2 = await supa.from("schedules").update({ booked: s.booked + 1 }).eq("id", s.id);
+  if (dbErr(r2, "update seats")) return;
+
+  await supa.from("audit_log").insert({ actor: currentUser.username, action: "Book Ticket", detail: "Booked " + newId });
 
   msg.innerHTML = "";
   conf.innerHTML = '<div class="confirm-box"><h2 style="margin-bottom:12px">Booking Confirmed!</h2>' +
     '<p style="font-size:13px;margin:4px 0">Passenger: ' + p.name + '</p>' +
-    '<p style="font-size:13px;margin:4px 0">Booking ID: ' + bid + '</p>' +
+    '<p style="font-size:13px;margin:4px 0">Booking ID: ' + newId + '</p>' +
     '<p style="font-size:13px;margin:4px 0">Train: ' + s.route + '</p>' +
     '<p style="font-size:13px;margin:4px 0">Seat: ' + seat + '</p>' +
     '<p style="font-size:13px;margin:4px 0">Price: ' + s.price + ' SAR</p>' +
@@ -362,7 +386,7 @@ function bookTicket() {
 
 
 // ============================================================
-// SARAH — Reservations (S-12, S-16, S-17) + Reports (S-20, S-21, S-22, S-23, S-24)
+// SARAH — Reservations + Reports
 // ============================================================
 
 var resFilter = "All";
@@ -401,51 +425,47 @@ function filterReservations() {
   for (var i = 0; i < DB.reservations.length; i++) {
     var r = DB.reservations[i];
     if (resFilter !== "All" && r.status !== resFilter) continue;
-    if (term && r.passenger.toLowerCase().indexOf(term) === -1 && r.id.indexOf(term) === -1 && r.train.toLowerCase().indexOf(term) === -1) continue;
+    if (term && r.passenger.toLowerCase().indexOf(term) === -1 && String(r.id).indexOf(term) === -1 && r.train.toLowerCase().indexOf(term) === -1) continue;
     html += resRow(r);
   }
   if (!html) html = '<tr><td colspan="7" style="text-align:center;color:#999;padding:16px">No reservations found.</td></tr>';
   body.innerHTML = html;
 }
 
-function cancelRes(id) {
-  if (confirm("Cancel reservation " + id + "?")) {
-    for (var i = 0; i < DB.reservations.length; i++) {
-      if (DB.reservations[i].id === id) {
-        DB.reservations[i].status = "Cancelled";
-        DB.auditLog.push({time:new Date().toLocaleString(), user:"staff", action:"Cancel", detail:"Cancelled " + id});
-        break;
-      }
-    }
-    navigate("reservations");
-  }
+// S-16: Cancel reservation (UPDATE status, give the seat back)
+async function cancelRes(id) {
+  if (!confirm("Cancel reservation " + id + "?")) return;
+  var r = DB.reservations.find(function (x) { return x.id === id; });
+  if (!r) return;
+
+  var res = await supa.from("reservations").update({ status: "Cancelled" }).eq("id", id);
+  if (dbErr(res, "cancel reservation")) return;
+
+  // release the seat: find the schedule by matching route, decrement booked
+  var s = DB.schedules.find(function (x) { return x.route === r.train; });
+  if (s && s.booked > 0) await supa.from("schedules").update({ booked: s.booked - 1 }).eq("id", s.id);
+
+  await supa.from("audit_log").insert({ actor: currentUser.username, action: "Cancel", detail: "Cancelled " + id });
+  navigate("reservations");
 }
 
 function renderReports() {
-  var conf = 0, canc = 0;
+  var conf = 0, canc = 0, revenue = 0;
   for (var i = 0; i < DB.reservations.length; i++) {
-    if (DB.reservations[i].status === "Confirmed") conf++;
+    if (DB.reservations[i].status === "Confirmed") { conf++; if (DB.reservations[i].price) revenue += Number(DB.reservations[i].price); }
     else canc++;
   }
 
   var h = topNav() + '<h2>Reports</h2>';
   h += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">';
-  var tabs = ["Daily","Weekly","Monthly","Revenue","Utilization"];
+  var tabs = ["Daily", "Weekly", "Monthly", "Revenue", "Utilization"];
   for (var t = 0; t < tabs.length; t++) h += '<span class="filter-tab">' + tabs[t] + '</span>';
   h += '</div>';
 
-  h += '<div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap">';
-  h += '<span style="font-size:11px;font-weight:600">FILTER BY :</span>';
-  h += '<select class="search-input"><option>Select Date</option></select>';
-  h += '<select class="search-input"><option>All Routes</option></select>';
-  h += '<select class="search-input"><option>All Types</option></select>';
-  h += '<span class="btn btn-g" style="margin-left:auto;font-size:10px">Apply Filters</span>';
-  h += '</div>';
-
   h += '<div class="stats-row">';
-  h += '<div class="stat-card"><div class="stat-val">' + conf + '</div><div class="stat-lbl">TOTAL BOOKINGS TODAY</div></div>';
-  h += '<div class="stat-card"><div class="stat-val">1500 SAR</div><div class="stat-lbl">REVENUE TODAY</div></div>';
-  h += '<div class="stat-card"><div class="stat-val">' + canc + '</div><div class="stat-lbl">CANCELLATIONS TODAY</div></div>';
+  h += '<div class="stat-card"><div class="stat-val">' + conf + '</div><div class="stat-lbl">CONFIRMED BOOKINGS</div></div>';
+  h += '<div class="stat-card"><div class="stat-val">' + revenue + ' SAR</div><div class="stat-lbl">CONFIRMED REVENUE</div></div>';
+  h += '<div class="stat-card"><div class="stat-val">' + canc + '</div><div class="stat-lbl">CANCELLATIONS</div></div>';
   h += '</div>';
 
   h += '<h3 style="font-size:14px;margin-bottom:3px">GENERATED REPORTS</h3>';
