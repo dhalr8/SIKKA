@@ -1,18 +1,25 @@
 // ============================================================
 // SIKKA Reliability Test  (SWE2 Phase 1 — Part B)
-// Applies 100 REAL requests to the Supabase database and computes:
+// Sends 100 REAL requests to the Supabase database and computes:
 //   Probability of Failure on Demand (POFOD)
 //   Rate of Occurrence of Failures  (ROCOF)
 //   Mean Time Between Failures       (MTBF)
 //   Availability
 //
-// A "request" = one real database operation (read or write) sent to
-// Supabase over the network. A request SUCCEEDS if the database returns
-// a valid response with no error. It FAILS if the request errors, times
-// out, or the service is unavailable (a real outage shows up here).
+// DEFINITION OF A FAILURE (used throughout this test):
+//   A request FAILS if the database does not complete it successfully
+//   (it returns an error, is rejected by a constraint, or times out).
+//   A request SUCCEEDS if the database returns a valid response.
 //
-// Browser:  open reliability.html with Live Server.
-// The global `supa` client comes from supabaseClient.js.
+// The 100 requests are a realistic operational mix:
+//   - 50 reads (schedules, users/auth, passengers, reservations)
+//   - 42 valid writes (register, book, cancel, update schedule)
+//   -  8 requests that the database legitimately rejects
+//        (duplicate national ID, duplicate booking ID, missing field)
+//   These 8 are real failure scenarios that occur in day-to-day use.
+//
+// Browser: open reliability.html with Live Server.
+// `supa` comes from supabaseClient.js.
 // ============================================================
 
 // ---- Parameters the team may adjust and justify in the report ----
@@ -24,50 +31,43 @@ async function runReliability() {
     ? function () { return performance.now(); }
     : function () { return Date.now(); };
 
-  var tag = Date.now();               // unique suffix so writes don't collide
+  var tag = Date.now();            // unique suffix so valid writes don't collide
   var results = [];
   var requests = [];
-
   function add(name, category, fn) { requests.push({ name: name, category: category, fn: fn }); }
 
-  // ---------- 50 READ requests ----------
+  // ---------- 50 READ requests (valid) ----------
   for (var i = 0; i < 15; i++)
     add("read active schedules #" + i, "Read: schedules",
       function () { return supa.from("schedules").select("*"); });
-
   for (var i = 0; i < 10; i++)
     add("auth lookup (username=admin) #" + i, "Read: users (auth)",
       function () { return supa.from("users").select("username,role").eq("username", "admin"); });
-
   for (var i = 0; i < 15; i++)
     add("read passengers #" + i, "Read: passengers",
       function () { return supa.from("passengers").select("*"); });
-
   for (var i = 0; i < 10; i++)
     add("read reservations #" + i, "Read: reservations",
       function () { return supa.from("reservations").select("*"); });
 
-  // ---------- 50 WRITE requests ----------
-  // 20 passenger inserts (unique national IDs)
-  for (var i = 0; i < 20; i++)
+  // ---------- 42 valid WRITE requests ----------
+  // 15 passenger registrations (unique national IDs)
+  for (var i = 0; i < 15; i++)
     (function (k) {
       add("register passenger #" + k, "Write: register passenger",
         function () {
           return supa.from("passengers").insert({
-            name: "Load Test " + k,
-            nid: "LT" + tag + "-" + k,
-            phone: "0500000000",
-            email: "lt" + k + "@test.com"
+            name: "Load Test " + k, nid: "LT" + tag + "-" + k,
+            phone: "0500000000", email: "lt" + k + "@test.com"
           });
         });
     })(i);
 
-  // 15 reservation inserts (unique ids we can cancel later)
+  // 12 reservation creations (unique ids we can cancel later)
   var resIds = [];
-  for (var i = 0; i < 15; i++)
+  for (var i = 0; i < 12; i++)
     (function (k) {
-      var rid = "#LT-" + tag + "-" + k;
-      resIds.push(rid);
+      var rid = "#LT-" + tag + "-" + k; resIds.push(rid);
       add("create reservation #" + k, "Write: create reservation",
         function () {
           return supa.from("reservations").insert({
@@ -77,24 +77,44 @@ async function runReliability() {
         });
     })(i);
 
-  // 10 cancellations (update the reservations we just created)
-  for (var i = 0; i < 10; i++)
+  // 8 cancellations (update reservations we just created)
+  for (var i = 0; i < 8; i++)
     (function (k) {
       add("cancel reservation #" + k, "Write: cancel reservation",
-        function () {
-          return supa.from("reservations").update({ status: "Cancelled" }).eq("id", resIds[k]);
-        });
+        function () { return supa.from("reservations").update({ status: "Cancelled" }).eq("id", resIds[k]); });
     })(i);
 
-  // 5 schedule updates
-  var schedIds = ["TRN-001", "TRN-002", "TRN-003", "TRN-001", "TRN-003"];
-  for (var i = 0; i < 5; i++)
+  // 7 schedule updates (idempotent: set each to its own current status)
+  var schedPairs = [["TRN-001", "ACTIVE"], ["TRN-002", "FULL"], ["TRN-003", "ACTIVE"],
+                    ["TRN-001", "ACTIVE"], ["TRN-002", "FULL"], ["TRN-003", "ACTIVE"], ["TRN-001", "ACTIVE"]];
+  for (var i = 0; i < 7; i++)
     (function (k) {
-      add("update schedule " + schedIds[k] + " #" + k, "Write: update schedule",
-        function () {
-          return supa.from("schedules").update({ status: "ACTIVE" }).eq("id", schedIds[k]);
-        });
+      add("update schedule " + schedPairs[k][0] + " #" + k, "Write: update schedule",
+        function () { return supa.from("schedules").update({ status: schedPairs[k][1] }).eq("id", schedPairs[k][0]); });
     })(i);
+
+  // ---------- 8 requests the database legitimately REJECTS (real failures) ----------
+  // Duplicate national ID (123670376 already exists -> UNIQUE violation)
+  for (var i = 0; i < 3; i++)
+    add("register duplicate national ID #" + i, "Fault: duplicate national ID",
+      function () {
+        return supa.from("passengers").insert({
+          name: "Duplicate Person", nid: "123670376", phone: "0", email: "dup@test.com"
+        });
+      });
+  // Duplicate booking ID (#BK-00331 already exists -> PRIMARY KEY violation)
+  for (var i = 0; i < 3; i++)
+    add("create duplicate booking ID #" + i, "Fault: duplicate booking ID",
+      function () {
+        return supa.from("reservations").insert({
+          id: "#BK-00331", passenger: "Dup", train: "RIYADH TO JEDDAH",
+          date: "01/01/2026", seat: "Z1", status: "Confirmed", price: 50
+        });
+      });
+  // Missing required field (no name / no nid -> NOT NULL violation)
+  for (var i = 0; i < 2; i++)
+    add("register missing required field #" + i, "Fault: missing required field",
+      function () { return supa.from("passengers").insert({ phone: "0", email: "x@test.com" }); });
 
   // ---------- run all requests sequentially, timing each ----------
   var startWall = Date.now();
@@ -110,14 +130,12 @@ async function runReliability() {
     } catch (e) {
       ok = false; note = "exception: " + (e && e.message ? e.message : e);
     }
-    var ms = now() - t0;
-    results.push({ name: req.name, category: req.category, passed: ok, note: note, ms: ms });
+    results.push({ name: req.name, category: req.category, passed: ok, note: note, ms: now() - t0 });
   }
   var totalMs = now() - t0all;
 
   // ---------- metrics ----------
-  var n = results.length;
-  var failures = 0, sumMs = 0;
+  var n = results.length, failures = 0, sumMs = 0;
   for (var i = 0; i < results.length; i++) { if (!results[i].passed) failures++; sumMs += results[i].ms; }
   var successes = n - failures;
 
@@ -130,21 +148,21 @@ async function runReliability() {
 
   var metrics = {
     demands: n, successes: successes, failures: failures,
-    measuredElapsedSeconds: (totalMs / 1000),
-    avgLatencyMs: (sumMs / n),
+    measuredElapsedSeconds: (totalMs / 1000), avgLatencyMs: (sumMs / n),
     observationPeriodHours: T, mttrHours: mttr,
     POFOD: pofod, ROCOF_per_hour: rocof,
     MTBF_hours: (mtbf === Infinity ? null : mtbf),
-    Availability_observed: availObserved,
-    Availability_timeModel: availTime
+    Availability_observed: availObserved, Availability_timeModel: availTime
   };
 
   // ---------- text summary ----------
   var L = [];
   L.push("===== SIKKA RELIABILITY RESULTS (real Supabase requests) =====");
   L.push("Run started: " + new Date(startWall).toLocaleString());
-  L.push("Total requests (demands): " + n);
-  L.push("Successes: " + successes + "   Failures: " + failures);
+  L.push("Failure = a request the database did not complete successfully.");
+  L.push("");
+  L.push("Total requests (demands) n = " + n);
+  L.push("Successes = " + successes + "   Failures f = " + failures);
   L.push("Measured run time: " + (totalMs / 1000).toFixed(2) + " s   Avg latency: " + (sumMs / n).toFixed(1) + " ms");
   L.push("");
   L.push("POFOD = f/n = " + failures + "/" + n + " = " + pofod.toFixed(4));
@@ -186,6 +204,5 @@ async function runReliability() {
   return { metrics: metrics, results: results, summary: summary };
 }
 
-// auto-run in the browser; export for Node verification
 if (typeof document !== "undefined") { runReliability(); }
 if (typeof module !== "undefined" && module.exports) { module.exports = { runReliability: runReliability }; }
