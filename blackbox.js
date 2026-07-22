@@ -19,6 +19,15 @@ async function runBlackBox() {
   var tag = Date.now();
   var results = [];
 
+  // Run unattended: the app uses confirm()/alert()/prompt(), which block the
+  // browser. Auto-answer them so the suite runs end to end. Any database error
+  // that would have been alerted is written to the console instead.
+  if (typeof window !== "undefined") {
+    window.confirm = function () { return true; };
+    window.prompt = function () { return null; };
+    window.alert = function (m) { console.log("[app alert] " + m); };
+  }
+
   function record(id, req, technique, partition, input, expected, actual) {
     results.push({
       id: id, req: req, technique: technique, partition: partition,
@@ -46,9 +55,12 @@ async function runBlackBox() {
     $("sId").value = id; $("sRoute").value = route;
     $("sDep").value = dep; $("sArr").value = arr;
     $("sSeats").value = seats; $("sPrice").value = price;
+    var before = DB.schedules.length;
     await addSchedule();
     await loadAll();
-    return DB.schedules.some(function (s) { return s.id === id; }) ? "Created" : "Rejected";
+    // "Created" only if a NEW row was added (a duplicate-ID row already
+    // existing must not count as a successful creation).
+    return DB.schedules.length > before ? "Created" : "Rejected";
   }
 
   async function bookTicket_(passId, trainId) {
