@@ -1,0 +1,14 @@
+{
+  "name": "sikka",
+  "version": "1.0.0",
+  "description": "SIKKA - Train Schedule & Reservation System (CS1351 Software Engineering 2)",
+  "private": true,
+  "scripts": {
+    "test": "node --test \"tests/*.test.js\"",
+    "test:functional": "node --test tests/functional.test.js",
+    "test:nonfunctional": "node --test tests/nonfunctional.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

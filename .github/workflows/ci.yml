@@ -1,0 +1,60 @@
+name: SIKKA CI
+
+# CI/CD pipeline for SWE2 Phase 2 - Automated Testing.
+# Runs on every push and pull request, and can be started manually
+# from the Actions tab using "Run workflow".
+on:
+  push:
+    branches: [ main, swe2-phase1 ]
+  pull_request:
+    branches: [ main, swe2-phase1 ]
+  workflow_dispatch:
+
+jobs:
+  automated-tests:
+    name: Functional & Non-Functional Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Show environment
+        run: node --version
+
+      - name: Run FUNCTIONAL tests
+        run: node --test tests/functional.test.js
+
+      - name: Run NON-FUNCTIONAL tests
+        run: node --test tests/nonfunctional.test.js
+
+      - name: Generate test report
+        if: always()
+        run: |
+          mkdir -p reports
+          {
+            echo "SIKKA - Automated Test Report"
+            echo "============================="
+            echo "Commit:  ${GITHUB_SHA}"
+            echo "Branch:  ${GITHUB_REF_NAME}"
+            echo "Run at:  $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            echo ""
+            echo "--- FUNCTIONAL TESTS ---"
+            node --test tests/functional.test.js 2>&1 || true
+            echo ""
+            echo "--- NON-FUNCTIONAL TESTS ---"
+            node --test tests/nonfunctional.test.js 2>&1 || true
+          } > reports/test-report.txt
+          cat reports/test-report.txt
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sikka-test-report
+          path: reports/test-report.txt
