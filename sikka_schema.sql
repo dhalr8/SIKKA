@@ -37,11 +37,14 @@ create table if not exists reservations (
   id        text primary key,
   passenger text,
   train     text,
+  train_id  text,
   date      text,
   seat      text,
   status    text not null default 'Confirmed',
   price     numeric
 );
+-- for databases created before train_id existed:
+alter table reservations add column if not exists train_id text;
 
 create table if not exists audit_log (
   id      serial primary key,

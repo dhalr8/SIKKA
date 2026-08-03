@@ -363,7 +363,7 @@ async function bookTicket() {
 
   // 1) create the reservation
   var r1 = await supa.from("reservations").insert({
-    id: newId, passenger: p.name, train: s.route,
+    id: newId, passenger: p.name, train: s.route, train_id: s.id,
     date: new Date().toLocaleDateString(), seat: seat, status: "Confirmed", price: s.price
   });
   if (dbErr(r1, "create reservation")) return;
@@ -441,8 +441,11 @@ async function cancelRes(id) {
   var res = await supa.from("reservations").update({ status: "Cancelled" }).eq("id", id);
   if (dbErr(res, "cancel reservation")) return;
 
-  // release the seat: find the schedule by matching route, decrement booked
-  var s = DB.schedules.find(function (x) { return x.route === r.train; });
+  // release the seat: match the exact train by id (unique); fall back to
+  // route only for older reservations that have no train_id stored.
+  var s = null;
+  if (r.train_id) s = DB.schedules.find(function (x) { return x.id === r.train_id; });
+  if (!s) s = DB.schedules.find(function (x) { return x.route === r.train; });
   if (s && s.booked > 0) await supa.from("schedules").update({ booked: s.booked - 1 }).eq("id", s.id);
 
   await supa.from("audit_log").insert({ actor: currentUser.username, action: "Cancel", detail: "Cancelled " + id });
