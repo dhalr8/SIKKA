@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SIKKA - Reliability Test (100 real DB requests)</title>
+<style> body{font-family:Arial,sans-serif;margin:24px;color:#222} h1{font-size:20px} </style>
+</head>
+<body>
+  <h1>SIKKA Reliability Test &mdash; 100 Real Database Requests</h1>
+  <p>This page sends 100 real requests to the Supabase database and computes
+     POFOD, ROCOF, MTBF and Availability. Open it with <b>Live Server</b> (not file://).
+     Results appear below and in the browser console.</p>
+  <div id="relResults">Running… (make sure the tables exist — run sikka_schema.sql first)</div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="supabaseClient.js"></script>
+  <script src="reliability.js"></script>
+</body>
+</html>

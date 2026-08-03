@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SIKKA - Black-Box Testing (EP + BVA)</title>
+<style>
+  body { font-family: Arial, sans-serif; margin: 24px; color: #222; }
+  h1 { font-size: 20px; }
+  .hidden-host { position: absolute; left: -9999px; top: -9999px; }
+</style>
+</head>
+<body>
+  <h1>SIKKA Black-Box Testing &mdash; Equivalence Partitioning &amp; Boundary Value Analysis</h1>
+  <p>Runs the test cases for the six project requirements against the live database.
+     Open with <b>Live Server</b> (not file://).</p>
+
+  <!-- hidden app shell the real functions read/write while tests run -->
+  <div class="hidden-host" id="loginPage"></div>
+  <div class="hidden-host" id="appPage"></div>
+  <div class="hidden-host">
+    <input id="loginUser"><input id="loginPass" type="password">
+    <span id="loginError"></span>
+    <span id="sidebarName"></span><span id="sidebarRole"></span>
+    <div id="mainContent"></div>
+  </div>
+
+  <div id="bbResults">Running…</div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="supabaseClient.js"></script>
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+  <script src="blackbox.js"></script>
+</body>
+</html>

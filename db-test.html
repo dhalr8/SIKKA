@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>SIKKA - Supabase Connection Test</title>
+<style> body{font-family:Arial;margin:24px} pre{background:#f6f8fa;padding:14px;border-radius:8px} </style>
+</head>
+<body>
+  <h1>SIKKA &mdash; Supabase Connection Test</h1>
+  <p>If the connection works, the schedules from your database appear below.</p>
+  <pre id="out">Connecting…</pre>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="supabaseClient.js"></script>
+  <script>
+    (async function () {
+      var out = document.getElementById("out");
+      try {
+        var res = await supa.from("schedules").select("*");
+        if (res.error) { out.textContent = "ERROR: " + res.error.message; return; }
+        out.textContent = "CONNECTED. Rows returned: " + res.data.length + "\n\n" +
+          JSON.stringify(res.data, null, 2);
+      } catch (e) {
+        out.textContent = "EXCEPTION: " + (e && e.message ? e.message : e);
+      }
+    })();
+  </script>
+</body>
+</html>
